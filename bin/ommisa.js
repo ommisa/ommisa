@@ -211,6 +211,11 @@ async function main() {
         if (c.clause_title) out(`      ${c.clause_title}`);
       });
     }
+    if (answer.source_quality === "ocr") {
+      out("");
+      out(answer.quality_note || "WARNING: Partly grounded in experimental data source that was derived from OCR content. Please verify content against official publications.");
+      if (answer.experimental_sources?.length) out(`Experimental sources: ${answer.experimental_sources.join("; ")}`);
+    }
     if (answer.quota && typeof answer.quota.used === "number") {
       out("");
       out(`Quota: ${answer.quota.used} / ${answer.quota.limit} questions today (${member ? "member" : "public"} tier).`);
