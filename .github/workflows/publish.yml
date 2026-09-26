@@ -1,0 +1,32 @@
+# Publishes to npm from a workflow_dispatch (or a GitHub release) using
+# OIDC trusted publishing — no stored token. One-time setup on npmjs.com:
+# package settings → Trusted Publisher → link ommisa/ommisa + this file's
+# name. The package ships source (no build step); the suite runs as the
+# pre-publish gate.
+name: publish
+
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: npm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - run: npm install
+      - run: npm test
+      - name: publish (OIDC, provenance-attested)
+        run: npm publish --access public --provenance
+        env:
+

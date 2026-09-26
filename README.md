@@ -12,7 +12,7 @@ cones, citation-grounded answers.
 ## Quickstart
 
 ```sh
-npm install -g @ommisa/cli    # once published; until then: npx from a checkout
+npm install -g @ommisa/cli     # or: npx @ommisa/cli
 ommisa login
 ommisa ask "What is the MPE requirement for a load cell per OIML R 60?"
 ommisa status

@@ -40,7 +40,7 @@ const HELP = `ommisa — the OIML SMART AI, as your signed-in self
 
   ommisa login [--read-only]     sign in through the browser (device code)
   ommisa status                  the account, the service, the quota
-  ommisa ask "<question>"        ask (signed-in member tier, or the public tier)
+  ommisa ask "<question>"        ask (your member tier by default; --public forces the anonymous tier)
       --lang LL                  answer language (e.g. fr)
       --fresh                    bypass the answer caches
       --conversation ID          continue a stored conversation
@@ -79,6 +79,7 @@ function parseArgv(argv) {
     else if (a === "--conversation") opts.conversation = argv[++i];
     else if (a === "--save") opts.save = true;
     else if (a === "--read-only") opts.readOnly = true;
+    else if (a === "--public") opts.public = true;
     else if (cmd.length === 0 && !a.startsWith("-")) cmd.push(a);
     else rest.push(a);
   }
@@ -164,9 +165,10 @@ async function main() {
       errOut('Usage: ommisa ask "<question>"');
       return 2;
     }
-    let creds = loadCredentials();
+    let creds = opts.public ? null : loadCredentials();
     if (creds?.access_token) creds = await ensureFresh(fetch, creds);
     const member = !!creds?.access_token;
+    if (opts.public) errOut("(--public — asking as an anonymous visitor)");
     const api = creds?.api || resolveConfig(opts).api;
     errOut(`Asking ${api}${member ? "" : " (public tier — ommisa login for the member tier)"} (this can take half a minute)...`);
 
@@ -215,6 +217,10 @@ async function main() {
       out("");
       out(answer.quality_note || "WARNING: Partly grounded in experimental data source that was derived from OCR content. Please verify content against official publications.");
       if (answer.experimental_sources?.length) out(`Experimental sources: ${answer.experimental_sources.join("; ")}`);
+    }
+    if (!member) {
+      out("");
+      out("You are on the public tier — a few questions a day, the public OIML corpus. `ommisa login` signs you in for the member tier: 300 questions a day, your memory files and conversations.");
     }
     if (answer.quota && typeof answer.quota.used === "number") {
       out("");
