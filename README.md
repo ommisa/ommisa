@@ -11,8 +11,7 @@ cones, citation-grounded answers.
 npm install -g @ommisa/cli    # once published; until then: npx from a checkout
 ommisa login
 ommisa ask "What is the MPE requirement for a load cell per OIML R 60?"
-ommisa whoami
-ommisa logout
+ommisa status
 ```
 
 `ommisa login` starts the OAuth device grant (RFC 8628): it prints a
@@ -20,12 +19,20 @@ short code and opens `https://id.oimlsmart.org/op/device`. Approve the
 code in the browser — the approval page re-judges the ask against your
 account's live standing — and the CLI completes on its own.
 
+Without signing in, `ommisa ask` still works — the public tier (a few
+questions a day, the public OIML corpus). The member tier adds the
+estate's internal corpora, your memory files, and stored conversations.
+
 ## Commands
 
 | Command | What it does |
 | --- | --- |
-| `ommisa login` | Device-flow sign-in; stores the tokens under `~/.config/ommisa/credentials.json` (mode 0600). |
-| `ommisa ask "<question>"` | Asks `POST /api/ask` as a Bearer member; prints the answer and its citations. Refreshes an expired token first; retries once on a 401. |
+| `ommisa login [--read-only]` | Device-flow sign-in; tokens live under `~/.config/ommisa/credentials.json` (mode 0600). Default scope `oiml-ai:read oiml-ai:write offline_access`; `--read-only` drops the write scope. |
+| `ommisa status` | The service health, the signed-in account, roles, scope, token expiry, and the day's quota (as of your last ask). |
+| `ommisa ask "<question>"` | Asks `POST /api/ask`; prints the answer, its citations and the quota echo. `--lang fr` sets the language, `--fresh` bypasses the answer caches, `--conversation ID` continues a stored conversation, `--save` stores the turn as a new conversation. Signed-out it asks anonymously. |
+| `ommisa memories` | List your memory files; `add "<name>" "<content>"`, `rm <id>`. Selected files join your asks as context. |
+| `ommisa conversations` | List stored conversations; `show <id>` prints a transcript, `new "<title>"` creates one, `rm <id>` removes. |
+| `ommisa files [project-id]` | List projects, or one project's files. |
 | `ommisa whoami` | Decodes the sign-in token locally (name, subject, roles, scope, expiry). Display only — the service re-judges the token server-side. |
 | `ommisa logout` | Removes the stored credentials. |
 
