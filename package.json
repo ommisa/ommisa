@@ -1,0 +1,32 @@
+{
+  "name": "@ommisa/cli",
+  "version": "0.1.0",
+  "description": "Ask the OIML SMART AI as your signed-in self — the device-grant CLI for the Ommisa assistant.",
+  "license": "BSD-3-Clause",
+  "type": "module",
+  "bin": {
+    "ommisa": "bin/ommisa.js"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test \"test/*.test.mjs\""
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ommisa/cli.git"
+  },
+  "keywords": [
+    "oiml",
+    "rag",
+    "cli",
+    "device-flow",
+    "rfc8628"
+  ]
+}
