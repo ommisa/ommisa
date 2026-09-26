@@ -108,7 +108,10 @@ async function main() {
   if (cmd === "login") {
     const scope = opts.scope || (opts.readOnly ? DEFAULTS.readOnlyScope : DEFAULTS.scope);
     const { creds, path, claims } = await login({ ...opts, scope }, { stdout: out });
-    out(`Signed in as ${claimName(claims)}. Credentials: ${path}`);
+    // the OP's device grant mints a personal access token — the response
+    // carries no id_token, so the honest display is the subject (a name
+    // lights up here automatically if the OP ever adds claims)
+    out(`Signed in — account ${claims?.name || claims?.preferred_username || creds.access_token.slice(0, 9) + "…"}. Credentials: ${path}`);
     const writable = /\bwrite\b/.test(creds.scope ?? "");
     out(`Scope: ${creds.scope}${writable ? "" : " (read only — memory and conversation writes are refused)"}`);
     return 0;
@@ -138,7 +141,7 @@ async function main() {
     }
     creds = await ensureFresh(fetch, creds);
     const claims = decodeJwtPayload(creds.id_token) || {};
-    out(`account:   ${claimName(claims)}`);
+    out(`account:   ${claimName(claims)}${claims.name ? "" : ` (${creds.access_token.slice(0, 9)}… — the device grant mints a nameless personal token)`}`);
     if (cmd === "status") {
       out(`subject:   ${claims.sub || "(not stated)"}`);
       out(`roles:     ${(claims.roles || []).join(", ") || "(none)"}`);
@@ -198,7 +201,12 @@ async function main() {
       out("");
       out("Citations:");
       cites.forEach((c, i) => {
-        const label = [c.docidentifier || c.doc_id, c.edition ? `:${c.edition}` : "", c.clause_anchor ? ` §${c.clause_anchor}` : ""].join("");
+        // the client's citationLabel rule: the edition appends only when
+        // the identifier does not already carry it ("R 60:2021" + "2021"
+        // must not read "R 60:2021:2021")
+        const id = String(c.docidentifier || c.doc_id || "source");
+        const edition = c.edition && !id.includes(String(c.edition)) ? `:${c.edition}` : "";
+        const label = [id, edition, c.clause_anchor ? ` §${c.clause_anchor}` : ""].join("");
         out(`  [${i + 1}] ${label}${c.language ? ` · ${c.language}` : ""}`);
         if (c.clause_title) out(`      ${c.clause_title}`);
       });
