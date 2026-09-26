@@ -21,6 +21,7 @@ import {
 import {
   health,
   askApi,
+  askStream,
   listMemories,
   createMemory,
   deleteMemory,
@@ -170,20 +171,39 @@ async function main() {
     const member = !!creds?.access_token;
     if (opts.public) errOut("(--public — asking as an anonymous visitor)");
     const api = creds?.api || resolveConfig(opts).api;
-    errOut(`Asking ${api}${member ? "" : " (public tier — ommisa login for the member tier)"} (this can take half a minute)...`);
-
     let history;
     let conversationId = opts.conversation || null;
     if (conversationId) {
-      if (needAuth(creds)) return 1;
-      const conv = await getConversation(fetch, api, creds.access_token, conversationId);
+      if (needAuth(loadCredentials())) return 1;
+      let c0 = loadCredentials();
+      const conv = await getConversation(fetch, creds?.api || resolveConfig(opts).api, c0?.access_token, conversationId);
       history = (conv.messages || []).slice(-8).map((m) => ({ role: m.role, content: m.content }));
     }
+    const { spinner } = await import("../lib/ui.mjs");
+    const spin = spinner();
+    let firstWrite = true;
+    const writeToken = (v) => {
+      if (firstWrite) {
+        firstWrite = false;
+        process.stdout.write("\n");
+      }
+      process.stdout.write(v);
+    };
 
     let answer;
     try {
-      answer = await askApi(fetch, { api, query, accessToken: creds?.access_token, lang: opts.lang, fresh: opts.fresh, history });
+      answer = await askStream(fetch, {
+        api,
+        query,
+        accessToken: creds?.access_token,
+        lang: opts.lang,
+        fresh: opts.fresh,
+        history,
+        stage: (l) => spin.stage(l),
+        token: writeToken,
+      });
     } catch (e) {
+      spin.done();
       if (e.status === 401 && creds?.refresh_token) {
         const next = await refreshTokens(fetch, { issuer: creds.issuer, clientId: creds.client_id }, creds);
         if (next === creds) {
@@ -196,35 +216,23 @@ async function main() {
         throw e;
       }
     }
+    spin.done();
+    if (firstWrite) {
+      // nothing streamed (cache hits arrive whole) — print the answer whole
+      process.stdout.write((answer.answer ?? "(the service returned no answer)") + "\n");
+    } else {
+      process.stdout.write("\n");
+    }
 
-    out(answer.answer ?? "(the service returned no answer)");
-    const cites = answer.citations || [];
-    if (cites.length) {
-      out("");
-      out("Citations:");
-      cites.forEach((c, i) => {
-        // the client's citationLabel rule: the edition appends only when
-        // the identifier does not already carry it ("R 60:2021" + "2021"
-        // must not read "R 60:2021:2021")
-        const id = String(c.docidentifier || c.doc_id || "source");
-        const edition = c.edition && !id.includes(String(c.edition)) ? `:${c.edition}` : "";
-        const label = [id, edition, c.clause_anchor ? ` §${c.clause_anchor}` : ""].join("");
-        out(`  [${i + 1}] ${label}${c.language ? ` · ${c.language}` : ""}`);
-        if (c.clause_title) out(`      ${c.clause_title}`);
-      });
-    }
+    // messages and warnings ride stderr; stdout stays the reply alone
+    errOut("");
     if (answer.source_quality === "ocr") {
-      out("");
-      out(answer.quality_note || "WARNING: Partly grounded in experimental data source that was derived from OCR content. Please verify content against official publications.");
-      if (answer.experimental_sources?.length) out(`Experimental sources: ${answer.experimental_sources.join("; ")}`);
+      errOut("⚠ " + (answer.confidence_note || answer.quality_note || "WARNING: Partly grounded in experimental OCR data. Verify against official publications."));
+      if (answer.experimental_sources?.length) errOut(`   Experimental sources: ${answer.experimental_sources.join("; ")}`);
     }
-    if (!member) {
-      out("");
-      out("You are on the public tier — a few questions a day, the public OIML corpus. `ommisa login` signs you in for the member tier: 300 questions a day, your memory files and conversations.");
-    }
+    if (!member) errOut("Public tier — `ommisa login` signs you in: 300 questions a day, your memory files and conversations.");
     if (answer.quota && typeof answer.quota.used === "number") {
-      out("");
-      out(`Quota: ${answer.quota.used} / ${answer.quota.limit} questions today (${member ? "member" : "public"} tier).`);
+      errOut(`Quota: ${answer.quota.used} / ${answer.quota.limit} today (${member ? "member" : "public"} tier).`);
       saveState({ ...loadState(), last_quota: { ...answer.quota, tier: member ? "member" : "anon", at: new Date().toISOString() } });
     }
 
