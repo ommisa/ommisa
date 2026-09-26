@@ -27,7 +27,7 @@ estate's internal corpora, your memory files, and stored conversations.
 
 | Command | What it does |
 | --- | --- |
-| `ommisa login [--read-only]` | Device-flow sign-in; tokens live under `~/.config/ommisa/credentials.json` (mode 0600). Default scope `oiml-ai:read oiml-ai:write offline_access`; `--read-only` drops the write scope. |
+| `ommisa login [--read-only]` | Device-flow sign-in; tokens live under `~/.config/ommisa/credentials.json` (mode 0600). Default scope `oiml-ai:read oiml-ai:write`; `--read-only` drops the write scope. |
 | `ommisa status` | The service health, the signed-in account, roles, scope, token expiry, and the day's quota (as of your last ask). |
 | `ommisa ask "<question>"` | Asks `POST /api/ask`; prints the answer, its citations and the quota echo. `--lang fr` sets the language, `--fresh` bypasses the answer caches, `--conversation ID` continues a stored conversation, `--save` stores the turn as a new conversation. Signed-out it asks anonymously. |
 | `ommisa memories` | List your memory files; `add "<name>" "<content>"`, `rm <id>`. Selected files join your asks as context. |
@@ -46,7 +46,7 @@ Environment overrides (each also takes a flag: `--issuer`, `--api`,
 | `OMMISA_ID` | `https://id.oimlsmart.org` |
 | `OMMISA_API` | `https://ai.oimlsmart.org` |
 | `OMMISA_CLIENT_ID` | `oiml-ommisa` |
-| `OMMISA_SCOPE` | `oiml-ai:read offline_access` |
+| `OMMISA_SCOPE` | `oiml-ai:read oiml-ai:write` (the OP's PAT grammar) |
 
 ## How it stays safe
 
