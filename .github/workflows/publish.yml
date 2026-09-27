@@ -1,8 +1,9 @@
-# Publishes to npm from a workflow_dispatch (or a GitHub release) using
-# OIDC trusted publishing — no stored token. One-time setup on npmjs.com:
-# package settings → Trusted Publisher → link ommisa/ommisa + this file's
-# name. The package ships source (no build step); the suite runs as the
-# pre-publish gate.
+# npm Trusted Publishing: the publish authenticates with the GitHub
+# Actions OIDC token — no npm token secret exists to leak or rotate.
+# Requires the one-time portal registration (npmjs.com → package →
+# Publishing access → Trusted Publisher: this repository, this
+# workflow filename). Publishes only on explicit human intent:
+# workflow_dispatch (you press the button) or a GitHub release.
 name: publish
 
 on:
@@ -17,7 +18,6 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    environment: npm
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -26,7 +26,9 @@ jobs:
           registry-url: https://registry.npmjs.org
       - run: npm install
       - run: npm test
+      - name: smoke the shipped bin (a broken bin never publishes)
+        run: |
+          out=$(node bin/ommisa.js) ; echo "$out"
+          echo "$out" | grep -q "ommisa — the OIML SMART AI"
       - name: publish (OIDC, provenance-attested)
         run: npm publish --access public --provenance
-        env:
-
