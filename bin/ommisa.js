@@ -48,7 +48,10 @@ const HELP = `ommisa — the OIML SMART AI, as your signed-in self
       --lang LL                  answer language (e.g. fr)
       --fresh                    bypass the answer caches
       --conversation ID          continue a stored conversation
+      -c, --continue             continue the last stored conversation
       --save                     store this turn as a new conversation
+      --timeout SEC              give up after SEC seconds (default 180)
+  ommisa chat                    a thread in your terminal — /new /save /lang LL /exit
   ommisa memories                list your memory files
   ommisa memories add "<name>" "<content>"
   ommisa memories rm <id>
@@ -86,6 +89,8 @@ function parseArgv(argv) {
     else if (a === "--public") opts.public = true;
     else if (a === "--json") opts.json = true;
     else if (a === "-o" || a === "--output") opts.output = argv[++i];
+    else if (a === "-c" || a === "--continue") opts.cont = true;
+    else if (a === "--timeout") opts.timeout = Number(argv[++i]);
     else if (cmd.length === 0 && !a.startsWith("-")) cmd.push(a);
     else rest.push(a);
   }
@@ -189,7 +194,8 @@ async function main() {
     if (opts.public) errOut("(--public — asking as an anonymous visitor)");
     const api = creds?.api || resolveConfig(opts).api;
     let history;
-    let conversationId = opts.conversation || null;
+    let conversationId = opts.conversation || (opts.cont ? loadState().last_conversation : null) || null;
+    if (opts.cont && !conversationId) errOut("No stored thread to continue yet — ask with --save first.");
     if (conversationId) {
       if (needAuth(loadCredentials())) return 1;
       let c0 = loadCredentials();
@@ -215,6 +221,7 @@ async function main() {
       replyText += v;
     };
 
+    opts.signal = AbortSignal.timeout((opts.timeout || 180) * 1000);
     let answer;
     try {
       answer = await askStream(fetch, {
@@ -224,8 +231,9 @@ async function main() {
         lang: opts.lang,
         fresh: opts.fresh,
         history,
-        stage: (l) => spin.stage(l),
-        token: writeToken,
+        signal: opts.signal,
+        onStage: (l) => spin.stage(l),
+        onToken: writeToken,
       });
       if (quiet) replyText = answer.answer ?? "";
     } catch (e) {
@@ -309,6 +317,7 @@ async function main() {
             const created = await createConversation(fetch, api, creds.access_token, query.slice(0, 120));
             conversationId = created.id;
           }
+          saveState({ ...loadState(), last_conversation: conversationId });
           await appendMessage(fetch, api, creds.access_token, conversationId, "user", query);
           await appendMessage(fetch, api, creds.access_token, conversationId, "assistant", answer.answer ?? "", cites.slice(0, 16));
           out(`Stored in conversation ${conversationId}.`);
@@ -317,6 +326,100 @@ async function main() {
         }
       }
     }
+    return 0;
+  }
+
+  // ── the REPL: a thread that lives in the terminal ───────────────────
+  if (cmd === "chat") {
+    const readline = await import("node:readline/promises");
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout, prompt: "" });
+    const { spinner, writeAnimated } = await import("../lib/ui.mjs");
+    let creds = opts.public ? null : loadCredentials();
+    if (creds?.access_token) creds = await ensureFresh(fetch, creds);
+    const member = !!creds?.access_token;
+    const api = creds?.api || resolveConfig(opts).api;
+    if (member) errOut(`Ommisa chat — ${claimName(decodeJwtPayload(creds.id_token) || {})} · /new clears the thread · /save stores it · /exit leaves.`);
+    else errOut("Ommisa chat — the public tier; the thread lives only in this terminal. `ommisa login` adds memory and stored conversations.");
+    let history = [];
+    let lang = opts.lang;
+    for (;;) {
+      let q;
+      try {
+        q = (await rl.question("› ")).trim();
+      } catch {
+        break; // Ctrl-C / Ctrl-D
+      }
+      if (!q) continue;
+      if (q === "/exit" || q === "/quit" || q === "/q") break;
+      if (q === "/new") {
+        history = [];
+        errOut("(a new thread)");
+        continue;
+      }
+      if (q.startsWith("/lang ")) {
+        lang = q.split(/\s+/)[1];
+        errOut(`(answering in ${lang})`);
+        continue;
+      }
+      if (q === "/save") {
+        if (!history.length) { errOut("Nothing to store yet."); continue; }
+        if (!member) { errOut("Storing conversations needs a member sign-in — `ommisa login`."); continue; }
+        try {
+          const created = await createConversation(fetch, api, creds.access_token, history[0].content.slice(0, 120));
+          for (const m of history) await appendMessage(fetch, api, creds.access_token, created.id, m.role, m.content);
+          errOut(`Stored as conversation ${created.id}.`);
+        } catch (e) {
+          errOut(`Storing failed: ${e.message}`);
+        }
+        continue;
+      }
+      if (q === "/help") {
+        errOut("/new clears the thread · /save stores it · /lang LL answers in a language · /exit leaves. Anything else is a question.");
+        continue;
+      }
+      const spin = spinner();
+      let streamed = false;
+      let reply = "";
+      let answer = null;
+      try {
+        answer = await askStream(fetch, {
+          api,
+          query: q,
+          accessToken: creds?.access_token,
+          lang,
+          fresh: opts.fresh,
+          history: history.slice(-8),
+          signal: opts.signal,
+          onStage: (l) => spin.stage(l),
+          onToken: (v) => {
+            if (!streamed) {
+              streamed = true;
+              spin.done();
+              process.stdout.write("\n");
+            }
+            process.stdout.write(v);
+            reply += v;
+          },
+        });
+        if (!streamed) {
+          reply = answer.answer ?? "";
+          await writeAnimated(reply);
+        }
+        process.stdout.write("\n\n");
+        const cites = answer.citations || [];
+        if (cites.length) {
+          errOut(`  · ${cites.slice(0, 6).map((c) => [String(c.docidentifier || c.doc_id || "source"), c.clause_anchor && !/^[0-9a-f]{8}-|^_/.test(c.clause_anchor) ? ` §${c.clause_anchor}` : ""].join("")).join("; ")}${cites.length > 6 ? ` (+${cites.length - 6})` : ""}`);
+        }
+        if (answer.source_quality === "ocr") {
+          errOut("⚠ " + (answer.confidence_note || answer.quality_note || "WARNING: Partly grounded in experimental OCR data. Verify against official publications."));
+        }
+        history.push({ role: "user", content: q }, { role: "assistant", content: reply });
+      } catch (e) {
+        spin.done();
+        errOut(`ommisa: ${e.message}`);
+      }
+    }
+    rl.close();
     return 0;
   }
 

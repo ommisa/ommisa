@@ -34,6 +34,7 @@ programme's internal corpora, your memory files, and stored conversations.
 | `ommisa login [--read-only]` | Device-flow sign-in; tokens live under `~/.config/ommisa/credentials.json` (mode 0600). Default scope `oiml-ai:read oiml-ai:write`; `--read-only` drops the write scope. |
 | `ommisa status` | The service health, the signed-in account, roles, scope, token expiry, and the day's quota (as of your last ask). |
 | `ommisa ask "<question>"` | Asks `POST /api/ask`; the reply is the only thing on stdout (streaming; the spinner and footer ride stderr). `--lang fr` sets the language, `--fresh` bypasses the answer caches, `--conversation ID` continues a stored conversation, `--save` stores the turn as a new conversation, `--public` forces the anonymous tier. Piped stdin becomes the question's context (`cat spec.md \| ommisa ask "summarize this"`). `--json` prints the full machine-readable response (answer, citations, confidence, quota) for pipelines; `-o FILE` writes the markdown reply to a file. Signed-out it asks anonymously. |
+| `ommisa chat` | A persistent thread in the terminal: every follow-up rides the conversation; `/new` clears it, `/save` stores it to your account, `/lang LL` switches language, `/exit` leaves. |
 | `ommisa memories` | List your memory files; `add "<name>" "<content>"`, `rm <id>`. Selected files join your asks as context. |
 | `ommisa conversations` | List stored conversations; `show <id>` prints a transcript, `new "<title>"` creates one, `rm <id>` removes. |
 | `ommisa files [project-id]` | List projects, or one project's files. |
