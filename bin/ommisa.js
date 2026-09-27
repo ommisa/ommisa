@@ -41,7 +41,9 @@ const HELP = `ommisa — the OIML SMART AI, as your signed-in self
 
   ommisa login [--read-only]     sign in through the browser (device code)
   ommisa status                  the account, the service, the quota
-  ommisa ask "<question>"        ask (your member tier by default; --public forces the anonymous tier)
+  ommisa ask "<question>"        ask (member tier by default; --public forces the anonymous tier)
+      --json                     print the machine-readable response on stdout
+      -o FILE                    write the answer (markdown) to a file
       --lang LL                  answer language (e.g. fr)
       --fresh                    bypass the answer caches
       --conversation ID          continue a stored conversation
@@ -81,6 +83,8 @@ function parseArgv(argv) {
     else if (a === "--save") opts.save = true;
     else if (a === "--read-only") opts.readOnly = true;
     else if (a === "--public") opts.public = true;
+    else if (a === "--json") opts.json = true;
+    else if (a === "-o" || a === "--output") opts.output = argv[++i];
     else if (cmd.length === 0 && !a.startsWith("-")) cmd.push(a);
     else rest.push(a);
   }
@@ -179,15 +183,23 @@ async function main() {
       const conv = await getConversation(fetch, creds?.api || resolveConfig(opts).api, c0?.access_token, conversationId);
       history = (conv.messages || []).slice(-8).map((m) => ({ role: m.role, content: m.content }));
     }
-    const { spinner } = await import("../lib/ui.mjs");
-    const spin = spinner();
-    let firstWrite = true;
+    const quiet = !!opts.json; // machine mode: no chatter anywhere
+    const { spinner, writeAnimated } = await import("../lib/ui.mjs");
+    const spin = quiet
+      ? { stage() {}, done() {} }
+      : spinner();
+    let streamedAny = false;
+    let replyText = "";
     const writeToken = (v) => {
-      if (firstWrite) {
-        firstWrite = false;
-        process.stdout.write("\n");
+      if (!quiet) {
+        if (streamedAny === false) {
+          streamedAny = true;
+          spin.done();
+          process.stdout.write("\n");
+        }
+        process.stdout.write(v);
       }
-      process.stdout.write(v);
+      replyText += v;
     };
 
     let answer;
@@ -202,6 +214,7 @@ async function main() {
         stage: (l) => spin.stage(l),
         token: writeToken,
       });
+      if (quiet) replyText = answer.answer ?? "";
     } catch (e) {
       spin.done();
       if (e.status === 401 && creds?.refresh_token) {
@@ -212,28 +225,66 @@ async function main() {
         }
         creds = next;
         answer = await askApi(fetch, { api, query, accessToken: creds.access_token, lang: opts.lang, fresh: opts.fresh, history });
+        if (quiet) replyText = answer.answer ?? "";
       } else {
         throw e;
       }
     }
     spin.done();
-    if (firstWrite) {
-      // nothing streamed (cache hits arrive whole) — print the answer whole
-      process.stdout.write((answer.answer ?? "(the service returned no answer)") + "\n");
+
+    const reply = replyText || (answer.answer ?? "");
+    // ── output ──
+    if (opts.json) {
+      // machine mode: the full response document on stdout; everything a
+      // pipeline needs (answer, citations, confidence, quota) in one parse
+      process.stdout.write(JSON.stringify({
+        answer: reply,
+        citations: answer.citations ?? [],
+        source_quality: answer.source_quality ?? null,
+        confidence_note: answer.confidence_note ?? null,
+        experimental_sources: answer.experimental_sources ?? [],
+        quota: answer.quota ?? null,
+        model: answer.model ?? null,
+        query_hash: answer.query_hash ?? null,
+      }, null, 2));
+    } else if (opts.output) {
+      const { writeFileSync } = await import("node:fs");
+      writeFileSync(opts.output, reply.endsWith("\n") ? reply : reply + "\n");
+      errOut(`Written to ${opts.output}.`);
     } else {
+      // the reply block: framed by blank lines so the reply never touches
+      // the status or the footer; whole-payload answers (cache hits arrive
+      // as one blob) animate at speed so every reply reads as streaming
       process.stdout.write("\n");
+      if (streamedAny) {
+        // tokens already flowed
+      } else {
+        await writeAnimated(reply);
+      }
+      process.stdout.write("\n\n");
     }
 
-    // messages and warnings ride stderr; stdout stays the reply alone
-    errOut("");
-    if (answer.source_quality === "ocr") {
-      errOut("⚠ " + (answer.confidence_note || answer.quality_note || "WARNING: Partly grounded in experimental OCR data. Verify against official publications."));
-      if (answer.experimental_sources?.length) errOut(`   Experimental sources: ${answer.experimental_sources.join("; ")}`);
-    }
-    if (!member) errOut("Public tier — `ommisa login` signs you in: 300 questions a day, your memory files and conversations.");
-    if (answer.quota && typeof answer.quota.used === "number") {
-      errOut(`Quota: ${answer.quota.used} / ${answer.quota.limit} today (${member ? "member" : "public"} tier).`);
-      saveState({ ...loadState(), last_quota: { ...answer.quota, tier: member ? "member" : "anon", at: new Date().toISOString() } });
+    // ── the footer: messages and warnings ride stderr, under a rule ──
+    if (!quiet) {
+      errOut("─".repeat(32));
+      const cites = answer.citations || [];
+      if (cites.length) {
+        cites.forEach((c, i) => {
+          const id = String(c.docidentifier || c.doc_id || "source");
+          const edition = c.edition && !id.includes(String(c.edition)) ? `:${c.edition}` : "";
+          errOut(`  [${i + 1}] ${[id, edition, c.clause_anchor && !/^[0-9a-f]{8}-|^_/.test(c.clause_anchor) ? ` §${c.clause_anchor}` : ""].join("")}${c.language ? ` · ${c.language}` : ""}`);
+        });
+        errOut("─".repeat(32));
+      }
+      if (answer.source_quality === "ocr") {
+        errOut("⚠ " + (answer.confidence_note || answer.quality_note || "WARNING: Partly grounded in experimental OCR data. Verify against official publications."));
+        if (answer.experimental_sources?.length) errOut(`   Experimental sources: ${answer.experimental_sources.join("; ")}`);
+      }
+      if (!member) errOut("Public tier — `ommisa login` signs you in: 300 questions a day, your memory files and conversations.");
+      if (answer.quota && typeof answer.quota.used === "number") {
+        errOut(`Quota: ${answer.quota.used} / ${answer.quota.limit} today (${member ? "member" : "public"} tier).`);
+        saveState({ ...loadState(), last_quota: { ...answer.quota, tier: member ? "member" : "anon", at: new Date().toISOString() } });
+      }
     }
 
     if ((opts.save || conversationId) && member) {

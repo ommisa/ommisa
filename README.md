@@ -5,7 +5,7 @@ package; the web app lives at ai.oimlsmart.org — same account, same
 answers, different surface).
 
 `@ommisa/cli` — the OIML Metrology Machine Intelligence Standards
-Assistant. Sign in once through the browser, then ask the estate's AI
+Assistant. Sign in once through the browser, then ask the OIML SMART AI
 service as your signed-in self: member-tier retrieval, your own corpora
 cones, citation-grounded answers.
 
@@ -25,7 +25,7 @@ account's live standing — and the CLI completes on its own.
 
 Without signing in, `ommisa ask` still works — the public tier (a few
 questions a day, the public OIML corpus). The member tier adds the
-estate's internal corpora, your memory files, and stored conversations.
+programme's internal corpora, your memory files, and stored conversations.
 
 ## Commands
 
