@@ -42,6 +42,7 @@ const HELP = `ommisa — the OIML SMART AI, as your signed-in self
   ommisa login [--read-only]     sign in through the browser (device code)
   ommisa status                  the account, the service, the quota
   ommisa ask "<question>"        ask (member tier by default; --public forces the anonymous tier)
+      (piped stdin)              piped text becomes the question's context: cat spec.md | ommisa ask "summarize this"
       --json                     print the machine-readable response on stdout
       -o FILE                    write the answer (markdown) to a file
       --lang LL                  answer language (e.g. fr)
@@ -97,6 +98,12 @@ function needAuth(creds) {
     return true;
   }
   return false;
+}
+
+async function readAllStdin() {
+  const chunks = [];
+  for await (const chunk of process.stdin) chunks.push(chunk);
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 function claimName(claims) {
@@ -165,9 +172,15 @@ async function main() {
 
   // ── the ask ────────────────────────────────────────────────────────
   if (cmd === "ask") {
-    const query = rest.join(" ").trim();
+    let query = rest.join(" ").trim();
+    if (!process.stdin.isTTY) {
+      // chaining: `cat spec.md | ommisa ask "summarize this"` — the piped
+      // text rides ahead of the question as its context
+      const piped = await readAllStdin();
+      if (piped.trim()) query = piped.trim() + "\n\n---\n\n" + query;
+    }
     if (!query) {
-      errOut('Usage: ommisa ask "<question>"');
+      errOut('Usage: ommisa ask "<question>"   (or pipe text into it)');
       return 2;
     }
     let creds = opts.public ? null : loadCredentials();
