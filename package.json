@@ -1,6 +1,6 @@
 {
   "name": "@ommisa/cli",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Ommisa CLI \u2014 ask the OIML SMART AI as your signed-in self (device-grant sign-in, member-tier answers).",
   "license": "BSD-3-Clause",
   "type": "module",
