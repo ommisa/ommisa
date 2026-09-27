@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// ommisa — the OIML Metrology Machine Intelligence Standards Assistant,
+// ommisa — the OIML Metrology Machine Intelligence SMART Assistant,
 // at the command line. Signs in through the estate OP's device grant
 // (RFC 8628) and speaks for the signed-in member: asks, quota, memory
 // files, conversations, project files. Signed-out, it still asks — the
