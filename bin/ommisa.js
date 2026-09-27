@@ -33,6 +33,8 @@ import {
   listProjects,
   listProjectFiles,
 } from "../lib/api.mjs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 const out = (s) => process.stdout.write(s + "\n");
 const errOut = (s) => process.stderr.write(s + "\n");
@@ -50,8 +52,14 @@ const HELP = `ommisa — the OIML SMART AI, as your signed-in self
       --conversation ID          continue a stored conversation
       -c, --continue             continue the last stored conversation
       --save                     store this turn as a new conversation
+      --attach FILE              put an image (PNG/JPEG/WebP/GIF, ≤4 MB) on this question
+      --stream-json              NDJSON events on stdout (stage/token/done) for pipelines
       --timeout SEC              give up after SEC seconds (default 180)
-  ommisa chat                    a thread in your terminal — /new /save /lang LL /exit
+      --no-md                    print raw markdown (the TTY render is on by default)
+
+  Exit codes: 0 ok · 1 failed · 2 usage · 4 quota spent · 130 interrupted
+  ommisa chat                    a thread in your terminal — /new /save /attach /lang /exit
+  ommisa log [N]                 the last N asks from this machine's local log
   ommisa memories                list your memory files
   ommisa memories add "<name>" "<content>"
   ommisa memories rm <id>
@@ -91,6 +99,9 @@ function parseArgv(argv) {
     else if (a === "-o" || a === "--output") opts.output = argv[++i];
     else if (a === "-c" || a === "--continue") opts.cont = true;
     else if (a === "--timeout") opts.timeout = Number(argv[++i]);
+    else if (a === "--attach") opts.attach = argv[++i];
+    else if (a === "--stream-json") opts.streamJson = true;
+    else if (a === "--no-md") opts.noMd = true;
     else if (cmd.length === 0 && !a.startsWith("-")) cmd.push(a);
     else rest.push(a);
   }
@@ -109,6 +120,39 @@ async function readAllStdin() {
   const chunks = [];
   for await (const chunk of process.stdin) chunks.push(chunk);
   return Buffer.concat(chunks).toString("utf8");
+}
+
+function logPath() {
+  const base = process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
+  return join(base, "ommisa", "log.jsonl");
+}
+
+// every ask lands in the local log — history for the signed-out, and
+// the receipt `-c` and `ommisa log` read
+async function logAsk(entry) {
+  try {
+    const { appendFile, mkdir } = await import("node:fs/promises");
+    const { dirname } = await import("node:path");
+    await mkdir(dirname(logPath()), { recursive: true });
+    await appendFile(logPath(), JSON.stringify(entry) + "\n");
+  } catch {
+    /* the log never blocks an answer */
+  }
+}
+
+const IMAGE_MIMES = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", gif: "image/gif" };
+
+async function imageDataUrl(file) {
+  const { readFileSync } = await import("node:fs");
+  const bytes = readFileSync(file);
+  if (bytes.length > 4_000_000) throw Object.assign(new Error("the image exceeds 4 MB"), { usage: true });
+  const h = bytes.subarray(0, 12);
+  const magic = h[0] === 0x89 && h[1] === 0x50 ? "png"
+    : h[0] === 0xff && h[1] === 0xd8 ? "jpg"
+    : h.length >= 12 && h[8] === 0x57 && h[9] === 0x45 && h[10] === 0x42 && h[11] === 0x50 ? "webp"
+    : h[0] === 0x47 && h[1] === 0x49 && h[2] === 0x46 ? "gif" : null;
+  if (!magic) throw Object.assign(new Error("only PNG, JPEG, WebP or GIF images are supported"), { usage: true });
+  return `data:${IMAGE_MIMES[magic]};base64,${bytes.toString("base64")}`;
 }
 
 function claimName(claims) {
@@ -202,7 +246,10 @@ async function main() {
       const conv = await getConversation(fetch, creds?.api || resolveConfig(opts).api, c0?.access_token, conversationId);
       history = (conv.messages || []).slice(-8).map((m) => ({ role: m.role, content: m.content }));
     }
-    const quiet = !!opts.json; // machine mode: no chatter anywhere
+    const quiet = !!opts.json || !!opts.streamJson; // machine mode: no chatter anywhere
+    const image = opts.attach ? await imageDataUrl(opts.attach) : null;
+    if (opts.attach && !image) errOut("(the image could not be read — asking without it)");
+    const ndjson = (obj) => process.stdout.write(JSON.stringify(obj) + "\n");
     const { spinner, writeAnimated } = await import("../lib/ui.mjs");
     const spin = quiet
       ? { stage() {}, done() {} }
@@ -231,9 +278,10 @@ async function main() {
         lang: opts.lang,
         fresh: opts.fresh,
         history,
+        image,
         signal: opts.signal,
-        onStage: (l) => spin.stage(l),
-        onToken: writeToken,
+        onStage: opts.streamJson ? (l) => l != null && ndjson({ type: "stage", label: l }) : (l) => spin.stage(l),
+        onToken: opts.streamJson ? (v) => ndjson({ type: "token", v }) : writeToken,
       });
       if (quiet) replyText = answer.answer ?? "";
     } catch (e) {
@@ -245,8 +293,12 @@ async function main() {
           return 1;
         }
         creds = next;
-        answer = await askApi(fetch, { api, query, accessToken: creds.access_token, lang: opts.lang, fresh: opts.fresh, history });
+        answer = await askApi(fetch, { api, query, accessToken: creds.access_token, lang: opts.lang, fresh: opts.fresh, history, image });
         if (quiet) replyText = answer.answer ?? "";
+      } else if (e.status === 429) {
+        if (opts.json) ndjson({ type: "error", error: { code: "quota_exhausted", message: e.message } });
+        errOut("Today's quota is spent — the count resets tomorrow (UTC). `ommisa status` shows where you stand.");
+        return 4;
       } else {
         throw e;
       }
@@ -279,10 +331,17 @@ async function main() {
       process.stdout.write("\n");
       if (streamedAny) {
         // tokens already flowed
+      } else if (process.stdout.isTTY && !opts.noMd) {
+        const { renderMd } = await import("../lib/md.mjs");
+        await writeAnimated(renderMd(reply, true));
       } else {
         await writeAnimated(reply);
       }
       process.stdout.write("\n\n");
+    }
+
+    if (opts.streamJson) {
+      ndjson({ type: "done", answer: reply, citations: answer.citations ?? [], source_quality: answer.source_quality ?? null, confidence_note: answer.confidence_note ?? null, experimental_sources: answer.experimental_sources ?? [], quota: answer.quota ?? null, model: answer.model ?? null });
     }
 
     // ── the footer: messages and warnings ride stderr, under a rule ──
@@ -308,6 +367,8 @@ async function main() {
       }
     }
 
+    logAsk({ at: new Date().toISOString(), query, answer: reply, citations: (answer.citations || []).map((c) => String(c.docidentifier || c.doc_id || c.label || "")).filter(Boolean).slice(0, 8), source_quality: answer.source_quality ?? null, model: answer.model ?? null, conversation: conversationId ?? null, tier: member ? "member" : "public" });
+
     if ((opts.save || conversationId) && member) {
       if (!/\bwrite\b/.test(creds.scope ?? "")) {
         errOut("This sign-in grants read only — the turn was not stored (re-run `ommisa login` for a write scope).");
@@ -329,6 +390,24 @@ async function main() {
     return 0;
   }
 
+  // ── the local ask log ──────────────────────────────────────────────
+  if (cmd === "log") {
+    const { readFile } = await import("node:fs/promises");
+    const txt = await readFile(logPath(), "utf8").catch(() => "");
+    const rows = txt.trim() ? txt.trim().split("\n").map((l) => JSON.parse(l)) : [];
+    if (!rows.length) {
+      out("No asks logged yet — every `ommisa ask` lands here.");
+      return 0;
+    }
+    const n = Math.max(1, Number(rest[0]) || 10);
+    for (const r of rows.slice(-n)) {
+      out(`${(r.at || "").slice(0, 16).replace("T", " ")}  [${r.tier || "?"}${r.source_quality === "ocr" ? " · ocr" : ""}]  ${String(r.query).slice(0, 72)}${String(r.query).length > 72 ? "…" : ""}`);
+      out(`    ${String(r.answer).replace(/\s+/g, " ").slice(0, 100)}${String(r.answer).length > 100 ? "…" : ""}`);
+      if (r.citations?.length) out(`    · ${r.citations.join("; ")}`);
+    }
+    return 0;
+  }
+
   // ── the REPL: a thread that lives in the terminal ───────────────────
   if (cmd === "chat") {
     const readline = await import("node:readline/promises");
@@ -342,6 +421,7 @@ async function main() {
     else errOut("Ommisa chat — the public tier; the thread lives only in this terminal. `ommisa login` adds memory and stored conversations.");
     let history = [];
     let lang = opts.lang;
+    let pendingImage = opts.attach ? await imageDataUrl(opts.attach) : null;
     for (;;) {
       let q;
       try {
@@ -373,8 +453,17 @@ async function main() {
         }
         continue;
       }
+      if (q.startsWith("/attach ")) {
+        try {
+          pendingImage = await imageDataUrl(q.slice(8).trim());
+          errOut("(the image rides your next question — photos are seen only in the turn they accompany)");
+        } catch (e) {
+          errOut(`ommisa: ${e.message}`);
+        }
+        continue;
+      }
       if (q === "/help") {
-        errOut("/new clears the thread · /save stores it · /lang LL answers in a language · /exit leaves. Anything else is a question.");
+        errOut("/new clears the thread · /save stores it · /attach FILE puts an image on your next question · /lang LL answers in a language · /exit leaves. Anything else is a question.");
         continue;
       }
       const spin = spinner();
@@ -389,6 +478,7 @@ async function main() {
           lang,
           fresh: opts.fresh,
           history: history.slice(-8),
+          image: pendingImage,
           signal: opts.signal,
           onStage: (l) => spin.stage(l),
           onToken: (v) => {
@@ -403,7 +493,12 @@ async function main() {
         });
         if (!streamed) {
           reply = answer.answer ?? "";
-          await writeAnimated(reply);
+          if (process.stdout.isTTY && !opts.noMd) {
+            const { renderMd } = await import("../lib/md.mjs");
+            await writeAnimated(renderMd(reply, true));
+          } else {
+            await writeAnimated(reply);
+          }
         }
         process.stdout.write("\n\n");
         const cites = answer.citations || [];
@@ -414,9 +509,12 @@ async function main() {
           errOut("⚠ " + (answer.confidence_note || answer.quality_note || "WARNING: Partly grounded in experimental OCR data. Verify against official publications."));
         }
         history.push({ role: "user", content: q }, { role: "assistant", content: reply });
+        logAsk({ at: new Date().toISOString(), query: q, answer: reply, citations: (answer.citations || []).map((c) => String(c.docidentifier || c.doc_id || "")).filter(Boolean).slice(0, 8), source_quality: answer.source_quality ?? null, tier: member ? "member" : "public" });
+        pendingImage = null;
       } catch (e) {
         spin.done();
-        errOut(`ommisa: ${e.message}`);
+        if (e.status === 429) errOut("Today's quota is spent — the count resets tomorrow (UTC).");
+        else errOut(`ommisa: ${e.message}`);
       }
     }
     rl.close();
@@ -540,5 +638,11 @@ main()
   .then((code) => process.exitCode = code)
   .catch((e) => {
     errOut(`ommisa: ${e.message}`);
-    process.exitCode = e.code === "cancelled" ? 130 : 1;
+    if (e.usage) {
+      errOut(`ommisa: ${e.message}`);
+      process.exitCode = 2;
+      return;
+    }
+    errOut(`ommisa: ${e.message}`);
+    process.exitCode = e.code === "cancelled" ? 130 : e.status === 429 ? 4 : 1;
   });
