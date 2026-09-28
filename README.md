@@ -1,7 +1,7 @@
 # Ommisa CLI
 
 `ommisa` — the OIML SMART AI at the command line (the `@ommisa/cli` npm
-package; the web app lives at ommisa.org — same account, same
+package; the web app lives at ai.oimlsmart.org — same account, same
 answers, different surface).
 
 `@ommisa/cli` — the OIML Metrology Machine Intelligence Standards
@@ -49,7 +49,7 @@ Environment overrides (each also takes a flag: `--issuer`, `--api`,
 | Variable | Default |
 | --- | --- |
 | `OMMISA_ID` | `https://id.oimlsmart.org` |
-| `OMMISA_API` | `https://ommisa.org` |
+| `OMMISA_API` | `https://ai.oimlsmart.org` |
 | `OMMISA_CLIENT_ID` | `oiml-ommisa` |
 | `OMMISA_SCOPE` | `oiml-ai:read oiml-ai:write` (the OP's PAT grammar) |
 
