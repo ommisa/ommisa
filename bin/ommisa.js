@@ -22,6 +22,7 @@ import {
   health,
   askApi,
   askStream,
+  uploadAttachment,
   listMemories,
   createMemory,
   deleteMemory,
@@ -247,7 +248,15 @@ async function main() {
       history = (conv.messages || []).slice(-8).map((m) => ({ role: m.role, content: m.content }));
     }
     const quiet = !!opts.json || !!opts.streamJson; // machine mode: no chatter anywhere
-    const image = opts.attach ? await imageDataUrl(opts.attach) : null;
+    let image = opts.attach ? await imageDataUrl(opts.attach) : null;
+    let attachmentIds;
+    if (image && member) {
+      // a member's photo persists (Tier-1) and later turns re-attach it (Tier-2)
+      try {
+        const id = await uploadAttachment(fetch, api, creds?.access_token, image);
+        if (id) { attachmentIds = [id]; image = undefined; }
+      } catch { /* the inline path still answers */ }
+    }
     if (opts.attach && !image) errOut("(the image could not be read — asking without it)");
     const ndjson = (obj) => process.stdout.write(JSON.stringify(obj) + "\n");
     const { spinner, writeAnimated } = await import("../lib/ui.mjs");
@@ -279,6 +288,7 @@ async function main() {
         fresh: opts.fresh,
         history,
         image,
+        attachmentIds,
         signal: opts.signal,
         onStage: opts.streamJson ? (l) => l != null && ndjson({ type: "stage", label: l }) : (l) => spin.stage(l),
         onToken: opts.streamJson ? (v) => ndjson({ type: "token", v }) : writeToken,
@@ -293,7 +303,7 @@ async function main() {
           return 1;
         }
         creds = next;
-        answer = await askApi(fetch, { api, query, accessToken: creds.access_token, lang: opts.lang, fresh: opts.fresh, history, image });
+        answer = await askApi(fetch, { api, query, accessToken: creds.access_token, lang: opts.lang, fresh: opts.fresh, history, image, attachmentIds });
         if (quiet) replyText = answer.answer ?? "";
       } else if (e.status === 429) {
         if (opts.json) ndjson({ type: "error", error: { code: "quota_exhausted", message: e.message } });
@@ -422,6 +432,7 @@ async function main() {
     let history = [];
     let lang = opts.lang;
     let pendingImage = opts.attach ? await imageDataUrl(opts.attach) : null;
+    let pendingAttachmentId = pendingImage && member ? await uploadAttachment(fetch, api, creds?.access_token, pendingImage).catch(() => null) : null;
     for (;;) {
       let q;
       try {
@@ -456,6 +467,7 @@ async function main() {
       if (q.startsWith("/attach ")) {
         try {
           pendingImage = await imageDataUrl(q.slice(8).trim());
+          pendingAttachmentId = member ? await uploadAttachment(fetch, api, creds?.access_token, pendingImage) : null;
           errOut("(the image rides your next question — photos are seen only in the turn they accompany)");
         } catch (e) {
           errOut(`ommisa: ${e.message}`);
@@ -478,7 +490,8 @@ async function main() {
           lang,
           fresh: opts.fresh,
           history: history.slice(-8),
-          image: pendingImage,
+          image: pendingAttachmentId ? undefined : pendingImage,
+          attachmentIds: pendingAttachmentId ? [pendingAttachmentId] : undefined,
           signal: opts.signal,
           onStage: (l) => spin.stage(l),
           onToken: (v) => {
@@ -511,6 +524,7 @@ async function main() {
         history.push({ role: "user", content: q }, { role: "assistant", content: reply });
         logAsk({ at: new Date().toISOString(), query: q, answer: reply, citations: (answer.citations || []).map((c) => String(c.docidentifier || c.doc_id || "")).filter(Boolean).slice(0, 8), source_quality: answer.source_quality ?? null, tier: member ? "member" : "public" });
         pendingImage = null;
+        pendingAttachmentId = null;
       } catch (e) {
         spin.done();
         if (e.status === 429) errOut("Today's quota is spent — the count resets tomorrow (UTC).");
